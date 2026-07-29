@@ -830,8 +830,17 @@
   function agregadosCaixa(lancamentos) {
     let entradas = 0, saidas = 0;
     lancamentos.forEach(l => {
+      const ehFatura = normalizarChave(l.categoria) === CATEGORIA_FATURA_CHAVE;
+
+      if (ehFatura) {
+        // Pagar fatura é sempre dinheiro real saindo do bolso, não importa
+        // qual banco/cartão foi tagueado no lançamento nem o campo "tipo".
+        saidas += l.valor;
+        return;
+      }
+
       const meio = bancoConfig(l.banco).meio;
-      if (meio !== 'debito') return; // só conta o que é conta real (débito)
+      if (meio !== 'debito') return; // compra no crédito ainda não é caixa real
       if (l.tipo === 'receita') entradas += l.valor;
       else saidas += l.valor;
     });
@@ -888,20 +897,36 @@
     const itens = [];
     const doMes = totaisPorCategoria(lancamentosDoMes(mesSelecionado));
     const doMesAnterior = totaisPorCategoria(lancamentosDoMes(mesAnterior(mesSelecionado)));
+    const mesAnteriorTemDados = Object.keys(doMesAnterior).length > 0;
+    const categoriasNovas = [];
 
     Object.entries(doMes).forEach(([categoria, total]) => {
       const anterior = doMesAnterior[categoria] || 0;
+
       if (anterior > 0) {
         const pct = ((total - anterior) / anterior) * 100;
         if (pct >= RADAR_VARIACAO_PERCENTUAL_MIN) {
           itens.push(`⚠️ Gastou ${pct.toFixed(0)}% a mais em ${categoria}.`);
         }
-      }
-      const diffAbs = total - anterior;
-      if (diffAbs >= RADAR_VARIACAO_ABSOLUTA_MIN) {
-        itens.push(`⚠️ ${categoria} aumentou ${formatarMoeda(diffAbs)}.`);
+        const diffAbs = total - anterior;
+        if (diffAbs >= RADAR_VARIACAO_ABSOLUTA_MIN) {
+          itens.push(`⚠️ ${categoria} aumentou ${formatarMoeda(diffAbs)}.`);
+        }
+      } else {
+        // Sem dado no mês anterior para essa categoria: não é "aumento", é ausência de base de comparação.
+        categoriasNovas.push({ categoria, total });
       }
     });
+
+    // Só sinaliza categoria nova se o mês anterior tinha dados de verdade (senão vira ruído: tudo "aumenta").
+    if (mesAnteriorTemDados && categoriasNovas.length > 0) {
+      categoriasNovas
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 2)
+        .forEach(({ categoria, total }) => {
+          itens.push(`🆕 Primeiro gasto do período em ${categoria} (${formatarMoeda(total)}), sem histórico no mês anterior.`);
+        });
+    }
 
     // Categorias com orçamento e sem compra recente
     orcamentosAtuais.forEach(({ categoria }) => {
