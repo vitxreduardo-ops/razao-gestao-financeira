@@ -644,7 +644,7 @@
 <script>
   // ============================================================
   // Troque pela URL do seu Apps Script (termina em /exec)
-  const API_URL = "https://script.google.com/macros/s/AKfycbziFytT_2_3S4v3lkl2Sml4Qr_hWOp95SEDrJKEYykQ3_olGufIkAQjycjoOubgMfP6/exec";
+  const API_URL = "https://script.google.com/macros/s/AKfycbwTPFm6ZHBBbejNXlTz1ibdL-xBag2K4rKu9H27DynvK7JxQSK1xIPjXtRhTRlkJof_/exec";
   // ============================================================
 
   // ---------- Configuração de bancos ----------
@@ -1295,7 +1295,7 @@
     btn.textContent = 'Importando...';
 
     try {
-      await fetch(API_URL, {
+      const resposta = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({
@@ -1306,12 +1306,21 @@
           }))
         })
       });
-      importarPreviewArea.innerHTML = `<p class="status-ok">✓ ${selecionadas.length} lançamento(s) importado(s) com sucesso.</p>`;
+      const dados = await resposta.json();
+
+      if (!dados.ok || dados.importados !== selecionadas.length) {
+        importarPreviewArea.innerHTML += `<p class="status-erro">⚠ O backend respondeu, mas só confirmou ${dados.importados ?? 0} de ${selecionadas.length} linha(s). Confira se o Apps Script foi reimplantado com a versão mais recente do Code.gs.</p>`;
+        btn.disabled = false;
+        btn.textContent = `Importar ${selecionadas.length} lançamento(s) selecionado(s)`;
+        return;
+      }
+
+      importarPreviewArea.innerHTML = `<p class="status-ok">✓ ${dados.importados} lançamento(s) importado(s) com sucesso.</p>`;
       campoArquivoImportacao.value = '';
       linhasImportacaoAtual = [];
       await carregarLancamentos();
     } catch (err) {
-      importarPreviewArea.innerHTML += `<p class="status-erro">Erro ao importar. Tente novamente.</p>`;
+      importarPreviewArea.innerHTML += `<p class="status-erro">Erro ao importar (${err.message}). Confira a URL da API e se o Apps Script está implantado.</p>`;
       btn.disabled = false;
       btn.textContent = `Importar ${selecionadas.length} lançamento(s) selecionado(s)`;
     }
