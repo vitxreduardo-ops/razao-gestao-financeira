@@ -425,6 +425,99 @@
     border: 1px solid var(--paper-line);
   }
   .radar-vazio { color: var(--ink-soft); font-style: italic; font-size: 13px; }
+
+  /* ---------- Importar planilha ---------- */
+  .painel-importar {
+    background: var(--white);
+    border: 1px solid var(--paper-line);
+    border-radius: 4px;
+    margin-bottom: 32px;
+    overflow: hidden;
+  }
+  .painel-importar summary {
+    cursor: pointer;
+    padding: 14px 18px;
+    font-family: 'Spectral', serif;
+    font-size: 15px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--ink-soft);
+    list-style: none;
+  }
+  .painel-importar summary::-webkit-details-marker { display: none; }
+  .painel-importar summary::before { content: "▸ "; }
+  .painel-importar[open] summary::before { content: "▾ "; }
+
+  .importar-corpo { padding: 0 18px 18px; }
+
+  .importar-instrucao {
+    font-size: 13px;
+    color: var(--ink-soft);
+    margin: 0 0 12px;
+    line-height: 1.5;
+  }
+  .importar-instrucao code {
+    background: var(--paper);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  input[type="file"] {
+    font-size: 13px;
+    padding: 8px;
+    border: 1px dashed var(--paper-line);
+    background: var(--paper);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .importar-resumo {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 14px 0 8px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+
+  .tabela-importar-wrap { max-height: 340px; overflow-y: auto; border: 1px solid var(--paper-line); border-radius: 4px; }
+
+  table.tabela-importar { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.tabela-importar thead th {
+    position: sticky; top: 0;
+    background: var(--white);
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--paper-line);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--ink-soft);
+  }
+  table.tabela-importar td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--paper-line);
+    vertical-align: middle;
+  }
+  table.tabela-importar tr.linha-com-erro { background: #FDF1EE; }
+
+  .status-ok { color: var(--green); font-size: 11px; }
+  .status-erro { color: var(--red); font-size: 11px; }
+
+  .btn-importar-confirmar {
+    background: var(--ink);
+    color: var(--white);
+    border: none;
+    padding: 10px 16px;
+    border-radius: 3px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    margin-top: 12px;
+  }
+  .btn-importar-confirmar:hover { background: var(--green); }
+  .btn-importar-confirmar:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -495,6 +588,20 @@
     <button type="submit" class="btn-add" id="btn-salvar">Adicionar lançamento</button>
   </form>
 
+  <details class="painel-importar" id="painel-importar">
+    <summary>Importar planilha (CSV/XLSX)</summary>
+    <div class="importar-corpo">
+      <p class="importar-instrucao">
+        Colunas esperadas (qualquer ordem, nomes sem acento/maiúsculas tanto faz):
+        <code>Data</code>, <code>Descricao</code>, <code>Categoria</code>, <code>Tipo</code>
+        (receita/despesa), <code>Valor</code>, <code>Banco</code>.
+        Nada é gravado até você conferir a prévia e confirmar.
+      </p>
+      <input type="file" id="campo-arquivo-importacao" accept=".csv,.xlsx,.xls">
+      <div id="importar-preview-area"></div>
+    </div>
+  </details>
+
   <div class="painel">
     <h2>Radar</h2>
     <div id="radar-corpo" class="radar-lista"></div>
@@ -533,6 +640,7 @@
 
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
   // ============================================================
   // Troque pela URL do seu Apps Script (termina em /exec)
@@ -604,6 +712,7 @@
 
   // ---------- Helpers ----------
   function formatarMoeda(valor) {
+    if (typeof valor !== 'number' || !isFinite(valor)) return 'R$ —';
     return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   }
 
@@ -1006,6 +1115,205 @@
       await carregarLancamentos();
     } catch (err) {
       alert('Erro ao excluir.');
+    }
+  }
+
+  // ---------- Importar planilha (CSV/XLSX) ----------
+  const campoArquivoImportacao = document.getElementById('campo-arquivo-importacao');
+  const importarPreviewArea = document.getElementById('importar-preview-area');
+  let linhasImportacaoAtual = [];
+
+  const CABECALHOS_ESPERADOS = {
+    'data': 'data', 'descricao': 'descricao', 'categoria': 'categoria',
+    'tipo': 'tipo', 'valor': 'valor', 'banco': 'banco'
+  };
+
+  campoArquivoImportacao.addEventListener('change', async (e) => {
+    const arquivo = e.target.files[0];
+    if (!arquivo) return;
+
+    try {
+      const buffer = await arquivo.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const primeiraAba = workbook.Sheets[workbook.SheetNames[0]];
+      const linhasBrutas = XLSX.utils.sheet_to_json(primeiraAba, { header: 1, raw: true });
+
+      if (linhasBrutas.length < 2) {
+        importarPreviewArea.innerHTML = `<p class="status-erro">O arquivo não tem linhas de dados além do cabeçalho.</p>`;
+        return;
+      }
+
+      const indiceColunas = mapearCabecalho(linhasBrutas[0]);
+      if (indiceColunas === null) {
+        importarPreviewArea.innerHTML = `<p class="status-erro">Não encontrei as colunas obrigatórias (Data, Descricao, Valor). Confira o cabeçalho da primeira linha.</p>`;
+        return;
+      }
+
+      linhasImportacaoAtual = linhasBrutas.slice(1)
+        .filter(linha => linha.some(c => c !== undefined && c !== null && String(c).trim() !== ''))
+        .map(linha => processarLinhaImportacao(linha, indiceColunas));
+
+      renderizarPreviewImportacao();
+    } catch (err) {
+      importarPreviewArea.innerHTML = `<p class="status-erro">Não consegui ler esse arquivo. Confira se é um .csv ou .xlsx válido.</p>`;
+    }
+  });
+
+  function mapearCabecalho(linhaCabecalho) {
+    const indices = {};
+    linhaCabecalho.forEach((celula, i) => {
+      const chave = normalizarChave(celula);
+      if (CABECALHOS_ESPERADOS[chave]) indices[CABECALHOS_ESPERADOS[chave]] = i;
+    });
+    if (indices.data === undefined || indices.descricao === undefined || indices.valor === undefined) return null;
+    return indices;
+  }
+
+  function processarLinhaImportacao(linha, idx) {
+    const erros = [];
+
+    const data = parseDataImportacao(linha[idx.data]);
+    if (!data) erros.push('data inválida');
+
+    const descricao = String(linha[idx.descricao] ?? '').trim();
+    if (!descricao) erros.push('sem descrição');
+
+    const { valor, sinalNegativo } = parseValorImportacao(linha[idx.valor]);
+    if (valor === null || isNaN(valor)) erros.push('valor inválido');
+
+    let tipo = idx.tipo !== undefined ? parseTipoImportacao(linha[idx.tipo]) : null;
+    if (!tipo) tipo = sinalNegativo ? 'despesa' : 'receita';
+
+    const categoria = idx.categoria !== undefined ? String(linha[idx.categoria] ?? '').trim() : '';
+    const banco = idx.banco !== undefined ? String(linha[idx.banco] ?? '').trim() : '';
+
+    return {
+      data, descricao, categoria, tipo,
+      valor: valor !== null ? Math.abs(valor) : null,
+      banco,
+      erros,
+      incluir: erros.length === 0
+    };
+  }
+
+  function parseDataImportacao(valor) {
+    if (valor instanceof Date && !isNaN(valor)) {
+      return `${valor.getFullYear()}-${String(valor.getMonth() + 1).padStart(2, '0')}-${String(valor.getDate()).padStart(2, '0')}`;
+    }
+    const texto = String(valor ?? '').trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(texto)) return texto.slice(0, 10);
+    const matchBR = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (matchBR) {
+      const [, d, m, a] = matchBR;
+      return `${a}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    }
+    return null;
+  }
+
+  function parseValorImportacao(valor) {
+    if (typeof valor === 'number') return { valor, sinalNegativo: valor < 0 };
+    let texto = String(valor ?? '').trim();
+    if (!texto) return { valor: null, sinalNegativo: false };
+    texto = texto.replace(/R\$\s?/i, '');
+    const negativo = texto.includes('-');
+    texto = texto.replace(/-/g, '');
+    if (texto.includes(',') && texto.includes('.')) {
+      texto = texto.replace(/\./g, '').replace(',', '.');
+    } else if (texto.includes(',')) {
+      texto = texto.replace(',', '.');
+    }
+    const numero = parseFloat(texto);
+    if (isNaN(numero)) return { valor: null, sinalNegativo: false };
+    return { valor: negativo ? -numero : numero, sinalNegativo: negativo };
+  }
+
+  function parseTipoImportacao(valor) {
+    const chave = normalizarChave(valor);
+    if (chave.startsWith('r')) return 'receita';
+    if (chave.startsWith('d')) return 'despesa';
+    return null;
+  }
+
+  function renderizarPreviewImportacao() {
+    const validas = linhasImportacaoAtual.filter(l => l.incluir).length;
+    const total = linhasImportacaoAtual.length;
+
+    const linhasHtml = linhasImportacaoAtual.map((l, i) => `
+      <tr class="${l.erros.length ? 'linha-com-erro' : ''}">
+        <td><input type="checkbox" ${l.incluir ? 'checked' : ''} ${l.erros.length ? 'disabled' : ''} onchange="alternarLinhaImportacao(${i}, this.checked)"></td>
+        <td>${l.data ? formatarDataBR(l.data) : '—'}</td>
+        <td>${l.descricao || '—'}</td>
+        <td>${l.categoria || '—'}</td>
+        <td>${l.tipo || '—'}</td>
+        <td>${l.banco || '—'}</td>
+        <td>${l.valor !== null ? formatarMoeda(l.valor) : '—'}</td>
+        <td>${l.erros.length ? `<span class="status-erro">⚠ ${l.erros.join(', ')}</span>` : `<span class="status-ok">✓ ok</span>`}</td>
+      </tr>
+    `).join('');
+
+    importarPreviewArea.innerHTML = `
+      <div class="importar-resumo">
+        <span>${validas} de ${total} linhas prontas pra importar</span>
+      </div>
+      <div class="tabela-importar-wrap">
+        <table class="tabela-importar">
+          <thead>
+            <tr><th></th><th>Data</th><th>Descrição</th><th>Categoria</th><th>Tipo</th><th>Banco</th><th>Valor</th><th>Status</th></tr>
+          </thead>
+          <tbody>${linhasHtml}</tbody>
+        </table>
+      </div>
+      <button class="btn-importar-confirmar" id="btn-confirmar-importacao" ${validas === 0 ? 'disabled' : ''}>
+        Importar ${validas} lançamento${validas === 1 ? '' : 's'} selecionado${validas === 1 ? '' : 's'}
+      </button>
+    `;
+
+    document.getElementById('btn-confirmar-importacao').addEventListener('click', confirmarImportacao);
+  }
+
+  function alternarLinhaImportacao(indice, marcado) {
+    linhasImportacaoAtual[indice].incluir = marcado;
+    const validas = linhasImportacaoAtual.filter(l => l.incluir).length;
+    const btn = document.getElementById('btn-confirmar-importacao');
+    btn.disabled = validas === 0;
+    btn.textContent = `Importar ${validas} lançamento${validas === 1 ? '' : 's'} selecionado${validas === 1 ? '' : 's'}`;
+    importarPreviewArea.querySelector('.importar-resumo span').textContent = `${validas} de ${linhasImportacaoAtual.length} linhas prontas pra importar`;
+  }
+
+  async function confirmarImportacao() {
+    const btn = document.getElementById('btn-confirmar-importacao');
+    const selecionadas = linhasImportacaoAtual.filter(l =>
+      l.incluir && l.data && l.descricao && l.valor !== null && !isNaN(l.valor)
+    );
+
+    if (selecionadas.length === 0) {
+      alert('Nenhuma linha válida selecionada.');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Importando...';
+
+    try {
+      await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          acao: 'importar_lote',
+          lancamentos: selecionadas.map(l => ({
+            data: l.data, descricao: l.descricao, categoria: l.categoria,
+            tipo: l.tipo, valor: l.valor, banco: l.banco
+          }))
+        })
+      });
+      importarPreviewArea.innerHTML = `<p class="status-ok">✓ ${selecionadas.length} lançamento(s) importado(s) com sucesso.</p>`;
+      campoArquivoImportacao.value = '';
+      linhasImportacaoAtual = [];
+      await carregarLancamentos();
+    } catch (err) {
+      importarPreviewArea.innerHTML += `<p class="status-erro">Erro ao importar. Tente novamente.</p>`;
+      btn.disabled = false;
+      btn.textContent = `Importar ${selecionadas.length} lançamento(s) selecionado(s)`;
     }
   }
 
