@@ -712,6 +712,7 @@
 
   // ---------- Helpers ----------
   function formatarMoeda(valor) {
+    if (typeof valor !== 'number' || !isFinite(valor)) return 'R$ —';
     return valor.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
   }
 
@@ -1149,7 +1150,7 @@
       }
 
       linhasImportacaoAtual = linhasBrutas.slice(1)
-        .filter(linha => linha.some(c => c !== undefined && c !== ''))
+        .filter(linha => linha.some(c => c !== undefined && c !== null && String(c).trim() !== ''))
         .map(linha => processarLinhaImportacao(linha, indiceColunas));
 
       renderizarPreviewImportacao();
@@ -1281,7 +1282,15 @@
 
   async function confirmarImportacao() {
     const btn = document.getElementById('btn-confirmar-importacao');
-    const selecionadas = linhasImportacaoAtual.filter(l => l.incluir);
+    const selecionadas = linhasImportacaoAtual.filter(l =>
+      l.incluir && l.data && l.descricao && l.valor !== null && !isNaN(l.valor)
+    );
+
+    if (selecionadas.length === 0) {
+      alert('Nenhuma linha válida selecionada.');
+      return;
+    }
+
     btn.disabled = true;
     btn.textContent = 'Importando...';
 
